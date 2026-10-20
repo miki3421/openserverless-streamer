@@ -87,10 +87,39 @@ actions using NDJSON must supply their own newline delimiters.
 
 Requests are bounded to 1 MiB of JSON, 64 active streams per proxy process,
 20 seconds to authenticate the callback, 30 seconds of callback inactivity,
-and five minutes total lifetime. A saturated process returns 429, oversized
+and five minutes total lifetime. A saturated quota returns 429, oversized
 input returns 413, and a missing callback returns 504. Upstream 401/403/404/429
 are retained; upstream failures use a sanitized 502 response. Request
 cancellation closes both the upstream request and callback resources.
+
+### Capacity isolation
+
+The local availability candidate also limits each target namespace and each
+verified caller to eight concurrent streams. For requests carrying an
+OpenWhisk API key, the proxy resolves the caller through the configured
+controller's `GET /api/v1/namespaces` endpoint. The sorted namespace set identifies
+the caller; changing Basic/Bearer encoding, using `_` as the target, or rotating
+credentials for the same identity does not create another quota. The lookup is
+bounded to two seconds, 32 KiB, and 16 concurrent requests. Credentials are not
+retained in the quota map. The action still performs its own authorization.
+
+Public web actions, including actions with custom web credentials, remain
+supported. Requests without a verified OpenWhisk identity share a pool of 32
+streams and at most 16 streams per direct TCP peer, in addition to the target
+namespace limit. Forwarded address headers do not establish a new identity.
+Behind an ingress, anonymous clients can therefore share the same peer quota.
+These are per-process bounds, not cluster-wide quotas or protection against
+every form of distributed denial of service. Ingress rate limiting remains a
+separate deployment concern. Private identity lookup failures are returned
+before action invocation; web credentials remain subject to the web action's
+existing authorization policy and use anonymous capacity if not verified.
+
+Callback preambles are checked concurrently by at most 32 pending workers per
+stream, with the existing one-second deadline. If the worker set is full, the
+oldest unauthenticated peer is closed to admit a new peer. Only one valid token
+can claim the stream; buffered payload bytes are preserved, and cancellation
+closes pending peers. This removes serial head-of-line blocking without
+introducing an unauthenticated fallback or changing the TruChat wire format.
 
 ## Building
 

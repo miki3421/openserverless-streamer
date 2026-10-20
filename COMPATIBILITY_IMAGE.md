@@ -47,3 +47,11 @@ tests (including all split positions and UTF-8), frontend build/type checks,
 Go race/vet, and three real-proxy synthetic transport scenarios. The smoke
 controller and AI are simulated; a full TruChat/OpenWhisk/model deployment on
 the destination server still requires the acceptance procedure above.
+
+## Unpublished follow-up
+
+The local 20 October availability changes are **not** included in the digest
+above. They add capacity isolation and concurrent callback authentication;
+see `README.md` and `ADVANCED.md`. No replacement image has been published.
+Do not use this historical artifact record as evidence that those two
+availability findings are fixed on another installation.

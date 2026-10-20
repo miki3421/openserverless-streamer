@@ -27,12 +27,14 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
 const handshakeTimeout = time.Second
 const callbackIdleTimeout = 30 * time.Second
 const handshakePrefix = "OPS-STREAM "
+const maxPendingHandshakes = 32
 
 type SocketsServer struct {
 	ctx            context.Context
@@ -69,30 +71,99 @@ func SetupTcpServer(ctx context.Context, addr string) (*SocketsServer, error) {
 }
 
 func (s *SocketsServer) acceptConnections() {
-	defer close(s.StreamDataChan)
+	var mu sync.Mutex
+	var workers sync.WaitGroup
+	slots := make(chan struct{}, maxPendingHandshakes)
+	pending := make(map[net.Conn]uint64)
+	var sequence uint64
+	claimed := false
+	closePending := func() {
+		for conn := range pending {
+			delete(pending, conn)
+			_ = conn.Close()
+		}
+	}
+	defer func() {
+		_ = s.listener.Close()
+		mu.Lock()
+		closePending()
+		mu.Unlock()
+		workers.Wait()
+		close(s.StreamDataChan)
+	}()
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			return
 		}
-		stopClose := context.AfterFunc(s.ctx, func() { _ = conn.Close() })
-		// Read a fixed-size authentication preamble before considering this peer
-		// the action producer. Rejected peers never consume the stream.
-		_ = conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
-		reader := bufio.NewReaderSize(conn, 256)
-		preamble := make([]byte, len(handshakePrefix)+len(s.Token)+1)
-		_, err = io.ReadFull(reader, preamble)
-		expected := handshakePrefix + s.Token + "\n"
-		if err != nil || subtle.ConstantTimeCompare(preamble, []byte(expected)) != 1 {
-			stopClose()
-			conn.Close()
-			continue
+		// Keep accepting while authentication reads run independently. If the
+		// bounded worker set is full, evict its oldest unauthenticated peer:
+		// otherwise a queue of silent peers can lock out the valid producer.
+		select {
+		case slots <- struct{}{}:
+		default:
+			mu.Lock()
+			var oldest net.Conn
+			var order uint64
+			for peer, started := range pending {
+				if oldest == nil || started < order {
+					oldest, order = peer, started
+				}
+			}
+			if oldest != nil {
+				delete(pending, oldest)
+				_ = oldest.Close()
+			}
+			winner := claimed
+			mu.Unlock()
+			if winner {
+				_ = conn.Close()
+				return
+			}
+			select {
+			case slots <- struct{}{}:
+			case <-s.ctx.Done():
+				_ = conn.Close()
+				return
+			}
 		}
-		close(s.Connected)
-		stopClose()
-		_ = s.listener.Close()
-		s.handleReader(conn, reader)
-		return
+		mu.Lock()
+		if claimed || s.ctx.Err() != nil {
+			mu.Unlock()
+			<-slots
+			_ = conn.Close()
+			return
+		}
+		sequence++
+		pending[conn] = sequence
+		mu.Unlock()
+		workers.Add(1)
+		go func(conn net.Conn) {
+			defer workers.Done()
+			defer func() { <-slots }()
+			defer conn.Close()
+			stopClose := context.AfterFunc(s.ctx, func() { _ = conn.Close() })
+			defer stopClose()
+			_ = conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
+			reader := bufio.NewReaderSize(conn, 256)
+			preamble := make([]byte, len(handshakePrefix)+len(s.Token)+1)
+			_, err := io.ReadFull(reader, preamble)
+			expected := handshakePrefix + s.Token + "\n"
+			mu.Lock()
+			_, stillPending := pending[conn]
+			delete(pending, conn)
+			if err != nil || !stillPending || claimed || s.ctx.Err() != nil || subtle.ConstantTimeCompare(preamble, []byte(expected)) != 1 {
+				mu.Unlock()
+				return
+			}
+			claimed = true
+			close(s.Connected)
+			_ = s.listener.Close()
+			closePending()
+			mu.Unlock()
+			// The same buffered reader owns any bytes read past the preamble.
+			s.handleReader(conn, reader)
+		}(conn)
 	}
 }
 
