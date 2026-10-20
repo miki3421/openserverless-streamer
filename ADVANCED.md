@@ -42,3 +42,7 @@ tenant-isolation hardening or an Apache release. See the TruChat fork's
 `docs/REMOTE_CODEX.md` for installation, acceptance, limits and rollback.
 
 See https://github.com/miki3421/openserverless/blob/advanced/ADVANCED.md for the component plan and validation status.
+
+An authenticated KB-specific mode has been evaluated but is not implemented in
+this image. See [KB_STREAMING_PROPOSAL.md](KB_STREAMING_PROPOSAL.md) for the
+compatibility evidence, proposed mode boundary and acceptance gates.
