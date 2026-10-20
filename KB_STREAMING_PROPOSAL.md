@@ -1,8 +1,8 @@
 # Authenticated KB stream mode on `kb-streaming`
 
 Status: locally implemented and tested, 20 October 2026. This document records
-the source boundary, local evidence and release gates. No image was built or
-published, and no shared Streamer rollout is authorized.
+the source boundary, local evidence and release gates. No Dockerfile/CI image
+was built or published, and no shared Streamer rollout has occurred.
 
 ## Baseline and observed compatibility
 
@@ -111,7 +111,12 @@ serve as a compatibility result because it sends an unauthenticated callback;
 it timed out against this fork. The local wrapper binary used for the final
 loopback runs has SHA-256
 `39058a9d13d62f4411c32dc926abf9e37c03cf53e7cbf80832d02706f64f63e7`.
-This is a local binary digest, not an installed image digest.
+This is a local binary digest, not an installed image digest. A separate local
+OCI layout for Linux amd64 was assembled from the static Go 1.27.2 build and
+verified by blob hashes; its provisional manifest digest is
+`sha256:cfdab288a97586acdaca9f66be0c066eae442750c1c8820259008b0e3e223abd`.
+It uses the workstation certificate bundle and does not replace the fork's
+Dockerfile/CI build or establish a registry or installed digest.
 
 Independent security review, generic-client inventory, image build/digest,
 deployment readiness and real-browser acceptance remain open. The source author

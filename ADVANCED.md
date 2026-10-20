@@ -23,9 +23,10 @@ Personal development branch maintained by miki3421, based on Apache OpenServerle
 
 The `advanced` branch belongs to https://github.com/miki3421/openserverless-streamer.
 Inherited GitHub Actions workflows remain archived under `.github/upstream-workflows/`.
-The personal `advanced-image.yml` workflow publishes only from this repository's
-`advanced` branch to `ghcr.io/miki3421/openserverless-streamer`, using a full-commit
-image tag. It runs Go race tests and vet before publishing a Linux amd64 image.
+The personal `advanced-image.yml` workflow publishes from this repository's
+`advanced` or `kb-streaming` branch to `ghcr.io/miki3421/openserverless-streamer`,
+using a branch name and full-commit image tag. It runs Go race tests and vet
+before publishing a Linux amd64 image.
 It has no Git write permission and creates no tags, releases, or Apache images.
 
 The callback authentication change requires a client-first rollout: update
