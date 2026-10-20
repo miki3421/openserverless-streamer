@@ -1,8 +1,8 @@
-# Proposal: authenticated KB stream mode on `advanced`
+# Authenticated KB stream mode on `kb-streaming`
 
-Status: proposed, 20 October 2026. This document is a design and verification
-record. It does not change the proxy protocol, publish an image, or authorize a
-shared Streamer rollout.
+Status: locally implemented and tested, 20 October 2026. This document records
+the source boundary, local evidence and release gates. No image was built or
+published, and no shared Streamer rollout is authorized.
 
 ## Baseline and observed compatibility
 
@@ -32,19 +32,22 @@ zero content loads and zero model calls; cleanup completed. This is a local
 compatibility result, not a live or security acceptance test.
 
 The KB relay patch prepared against Apache source `27cf4f4` does not apply
-cleanly to this fork. `git apply --check` fails in the web action handler and
-TCP server because both implementations change those files. Port the contract
-deliberately; do not stack the patch or replace the TruChat flow wholesale.
+cleanly to this fork. Its protocol and handler tests were ported into the fork;
+the web handler was integrated with the fork's existing private and generic
+paths. The supplied availability patch was integrated first (SHA-256
+`f9dda540474080c08f52fe90fc89eecd39a8ec79368af961ee1d5cdfc0587ae8`).
 
-## Proposed mode boundary
+## Implemented mode boundary
 
-1. Preserve the existing TruChat/generic mode, including `STREAM_TOKEN`, its
-   authenticated preamble, byte-preserving forwarding, current error mapping
-   and its documented bounds. Never add an unauthenticated callback fallback.
-2. Select KB mode only for the explicit KB action route and a valid versioned
-   `stream_request`. A missing, malformed or conflicting descriptor on that
-   route must fail closed before action invocation or callback allocation;
-   never retry the request in generic mode. Do not let the HTTP caller provide
+1. Preserve the existing generic `STREAM_TOKEN` preamble, byte-preserving
+   forwarding and private-action bounds. Never add an unauthenticated callback
+   fallback. The web admission, body and lifetime bounds change as described
+   below.
+2. Presence of `stream_request` selects KB mode, independent of the action
+   route. An invalid descriptor fails closed before action invocation or
+   callback allocation; never retry in generic mode. The KB action itself
+   rejects a missing descriptor or binding before protected content access.
+   Do not let the HTTP caller provide
    trusted `STREAM_HOST`, `STREAM_PORT`, `STREAM_TOKEN` or `stream_binding`.
 3. In KB mode inject the relay's listener host/port and a fresh binding over
    route, exact Cookie, raw question/history strings, request ID, expiry and
@@ -68,30 +71,27 @@ names, secret store, listener service or model configuration. Neither callback
 protocol encrypts TCP; the deployment network and browser HTTP/TLS boundary
 remain separate release decisions.
 
-The existing KB contract uses a 64 KiB request cap, 32 admitted KB requests
-before body parsing, 130-second relay lifetime, 2-second callback handshake,
-64 KiB frames, 256 KiB total output and 128 events. The generic fork currently
-allows 1 MiB requests, 64 global streams, 20 seconds to authenticate the
-callback, 30 seconds idle and five minutes total. The implementation must
-enforce the KB bounds for the KB route without silently reducing TruChat's
-documented limits. Keep a common global cap, and apply the KB route cap before
-reading its body. Review contention and the two existing availability findings
-(global slot starvation and serial partial handshakes) before any shared
-multi-tenant rollout.
+The web handler acquires one of 32 shared slots before parsing any body,
+including generic uploads. All web requests have a 64 KiB body limit and
+130-second lifetime. This applies the canonical KB admission contract before
+the descriptor can be read. The private action handler retains its 1 MiB body,
+64 process-wide admission and five-minute lifetime. The narrower web bounds
+are a compatibility change for generic web clients and require client inventory
+before a shared multi-tenant rollout. KB additionally uses a two-second
+callback handshake, 64 KiB frames, 256 KiB total output and 128 events.
 
-## Verification required for implementation
+## Local verification and remaining release gates
 
-- Pin the resulting fork commit and new immutable image digest. Review the
-  actual diff against `advanced`; do not treat the published TruChat digest as
-  KB capable.
+- Pin the resulting fork commit. A new immutable image digest is still needed
+  before any deployment; the published TruChat digest is not KB capable.
 - Retain TruChat compatibility tests and add positive/negative KB tests for
   descriptor and binding validation, wrong/replayed peers, HELLO/ACK,
   frame MAC/sequence/terminal, malformed input, limits, cancellation and
   concurrent streams. Run Go tests, race tests and vet on the exact candidate.
-- Run the KB synthetic browser → relay → real action loopback suite, including
-  a response delayed beyond 60 seconds, Stop, auth/CSRF rejection, expiry,
-  provider error and cleanup. Keep all fixtures synthetic. Confirm the
-  generic TruChat path and its browser parser still pass.
+- Re-run the KB synthetic browser → relay → real action loopback suite on the
+  final commit when packaging it. Keep all fixtures synthetic. Confirm generic
+  client compatibility after inventory; the existing legacy probe targets an
+  older callback preamble and needs the fork adapter.
 - Obtain independent security review of the merged trust boundary. The
   source author or this compatibility analysis cannot supply that review.
 - Before a shared upgrade, inventory every active client, update clients
@@ -99,6 +99,23 @@ multi-tenant rollout.
   workload source for rollback, then run readiness and real browser E2E on the
   target under a separately authorized rollout. No real browser, model or
   cluster acceptance is claimed here.
+
+The local Go suite, race suite and vet pass on the integrated source. The
+synthetic browser → relay → real KB action loopback suite passed all eight
+short cases: positive, anonymous, CSRF, session binding, input binding,
+provider error, expiry and Stop. The delayed case passed with 20 events over
+65.005 seconds. A loopback generic-web probe adapted to this fork's required
+`OPS-STREAM` preamble passed four cases: HTTP 202 callback, 64 KiB boundary,
+oversized body rejection and redirect refusal. The original older probe cannot
+serve as a compatibility result because it sends an unauthenticated callback;
+it timed out against this fork. The local wrapper binary used for the final
+loopback runs has SHA-256
+`39058a9d13d62f4411c32dc926abf9e37c03cf53e7cbf80832d02706f64f63e7`.
+This is a local binary digest, not an installed image digest.
+
+Independent security review, generic-client inventory, image build/digest,
+deployment readiness and real-browser acceptance remain open. The source author
+cannot claim independent security acceptance. No remote state was changed.
 
 ## Verification already completed
 
@@ -109,7 +126,7 @@ source. The published registry manifest was readable anonymously, matched
 the declared digest and identified a Linux amd64 image. Docker-based smoke,
 live ingress, browser acceptance and installation were not run.
 
-The KB's approved transport contract is the reference for this proposal.
+The KB's approved transport contract is the reference for this source change.
 Changing it to accept only the generic preamble would remove its request
 binding and relay-side frame authentication; that requires a separate
 architecture and security decision rather than an implicit client adaptation.

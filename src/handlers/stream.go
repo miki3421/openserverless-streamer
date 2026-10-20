@@ -74,8 +74,22 @@ func streamHandler(addr, host string, web bool) http.HandlerFunc {
 			http.Error(w, "Invalid action target", http.StatusBadRequest)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), maxStreamLifetime)
+		lifetime := maxStreamLifetime
+		if web {
+			lifetime = streamTimeout
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), lifetime)
 		defer cancel()
+		if web {
+			select {
+			case webStreamSlots <- struct{}{}:
+				defer func() { cancel(); <-webStreamSlots }()
+			default:
+				r.Body.Close()
+				http.Error(w, "Stream unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		principal, identityStatus := streamPrincipal(ctx, host, credential)
 		if !web && identityStatus != 0 {
 			http.Error(w, http.StatusText(identityStatus), identityStatus)
@@ -95,15 +109,27 @@ func streamHandler(addr, host string, web bool) http.HandlerFunc {
 		defer release()
 		// Quotas also cover slow/chunked input; no callback listener or action
 		// invocation is allocated until the bounded JSON object is decoded.
-		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-		body, err := injectHostPortInBody(r, "", "")
+		var body map[string]interface{}
+		var kb *tcp.Request
+		if web {
+			body, kb, err = parseBodyWithContext(ctx, w, r)
+		} else {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+			body, err = injectHostPortInBody(r, "", "")
+		}
 		if err != nil {
 			var tooLarge *http.MaxBytesError
 			status := http.StatusBadRequest
 			if errors.As(err, &tooLarge) {
 				status = http.StatusRequestEntityTooLarge
+			} else if web && ctx.Err() != nil {
+				status = http.StatusRequestTimeout
 			}
 			http.Error(w, http.StatusText(status), status)
+			return
+		}
+		if kb != nil {
+			serveKB(ctx, w, r, addr, target, body, *kb)
 			return
 		}
 		sock, err := tcp.SetupTcpServer(ctx, addr)

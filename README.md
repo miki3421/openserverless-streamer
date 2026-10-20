@@ -63,8 +63,8 @@ action on the given namespace, custom package, and action name.
 
 ## Authenticated callback contract
 
-The patched proxy injects `STREAM_HOST`, `STREAM_PORT`, and a random
-`STREAM_TOKEN` into every invoked action. Before sending output on the TCP
+For requests without `stream_request`, the proxy injects `STREAM_HOST`,
+`STREAM_PORT`, and a random `STREAM_TOKEN`. Before sending output on the TCP
 connection, the action must send the ASCII bytes `OPS-STREAM `, followed by
 the 64-character token and a newline. The proxy consumes this preamble and
 forwards only subsequent bytes to the HTTP client. Keep the token out of logs
@@ -85,10 +85,13 @@ always supplies it. The bundled example and Alpha/Beta validation action
 implement this transition. The TCP payload is forwarded byte-for-byte, so
 actions using NDJSON must supply their own newline delimiters.
 
-Requests are bounded to 1 MiB of JSON, 64 active streams per proxy process,
+Private action requests retain the 1 MiB JSON limit, 64 process-wide streams,
 20 seconds to authenticate the callback, 30 seconds of callback inactivity,
-and five minutes total lifetime. A saturated quota returns 429, oversized
-input returns 413, and a missing callback returns 504. Upstream 401/403/404/429
+and five minutes total lifetime. Web requests share 32 slots acquired before
+body parsing, accept at most 64 KiB of JSON, and have a 130-second lifetime.
+Full web admission returns 503; the existing per-target and caller quotas
+return 429. Oversized input returns 413, and a missing generic callback returns
+504. Upstream 401/403/404/429
 are retained; upstream failures use a sanitized 502 response. Request
 cancellation closes both the upstream request and callback resources.
 
@@ -120,6 +123,24 @@ oldest unauthenticated peer is closed to admit a new peer. Only one valid token
 can claim the stream; buffered payload bytes are preserved, and cancellation
 closes pending peers. This removes serial head-of-line blocking without
 introducing an unauthenticated fallback or changing the TruChat wire format.
+
+### KB web stream mode
+
+Presence of `stream_request` in a web request selects the authenticated KB
+protocol. An invalid descriptor fails with 400 and never falls back to the
+generic callback. The relay uses a fresh per-request listener and binding,
+forwards only Cookie, Origin and X-CSRF-Token, and sends no `STREAM_TOKEN` to
+the KB action. The action and relay authenticate HELLO/ACK before data, then
+the relay verifies sequence, MAC and payload syntax for each complete NDJSON
+record before forwarding its original bytes. The first terminal ends the
+stream. This selector is independent of the action route; the action must
+reject a missing descriptor and binding before accessing protected content.
+
+KB has a two-second handshake deadline for each of up to eight concurrent
+callback attempts, 64 KiB per frame, 256 KiB total output, 128 events and a
+four-record queue. A failed callback cannot claim the stream or switch modes.
+The browser must abort and close the HTTP response on Stop. The protocol and
+remaining release gates are recorded in `KB_STREAMING_PROPOSAL.md`.
 
 ## Building
 

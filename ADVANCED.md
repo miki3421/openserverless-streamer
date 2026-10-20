@@ -45,8 +45,8 @@ is integrated locally on `kb-streaming`. It addresses those findings with
 controller-verified per-caller quotas, target/anonymous quotas and bounded
 concurrent callback authentication. See `README.md` for the changed admission
 limits and deployment tradeoffs. The `OPS-STREAM <STREAM_TOKEN>\n` preamble and
-existing time/body bounds remain unchanged. No KB protocol compatibility is
-implied; authenticated KB streaming requires its own canonical contract.
+the private action time/body bounds remain unchanged. The web path receives
+the shared 32-request, 64 KiB and 130-second KB contract in this branch.
 
 The supplied patch reports original-trigger negative controls against commit
 `663a7fd3f31580f2f1c40820135d3c3338edab55`, Go race/vet checks, parallel/slow
@@ -64,6 +64,6 @@ previously published image, its limits and rollback.
 
 See https://github.com/miki3421/openserverless/blob/advanced/ADVANCED.md for the component plan and validation status.
 
-An authenticated KB-specific mode has been evaluated but is not implemented in
-this image. See [KB_STREAMING_PROPOSAL.md](KB_STREAMING_PROPOSAL.md) for the
-compatibility evidence, proposed mode boundary and acceptance gates.
+An authenticated KB mode is implemented locally on `kb-streaming`; it is absent
+from the published image. See [KB_STREAMING_PROPOSAL.md](KB_STREAMING_PROPOSAL.md)
+for compatibility evidence, local test results and remaining release gates.
