@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -77,7 +78,14 @@ func TestCancellationSurvivesUpstreamError(t *testing.T) {
 
 func TestBodyLimitRejectsBeforeUpstream(t *testing.T) {
 	var calls atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(403) }))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces" {
+			json.NewEncoder(w).Encode([]string{"synthetic"})
+			return
+		}
+		calls.Add(1)
+		w.WriteHeader(403)
+	}))
 	defer upstream.Close()
 	for _, web := range []bool{true, false} {
 		for _, method := range []string{"GET", "POST"} {
@@ -163,14 +171,19 @@ func TestSuccessfulNonStreamingActionHasCallbackDeadline(t *testing.T) {
 }
 
 func TestStreamConcurrencyLimitAndRecovery(t *testing.T) {
-	for i := 0; i < cap(streamSlots); i++ {
-		streamSlots <- struct{}{}
+	var releases []func()
+	for i := 0; i < maxActiveStreams; i++ {
+		release, ok := streams.acquire(fmt.Sprint(i), fmt.Sprint(i), "fixture")
+		if !ok {
+			t.Fatal("unexpected capacity rejection")
+		}
+		releases = append(releases, release)
 	}
 	req := routed(httptest.NewRequest("POST", "/", strings.NewReader("{}")))
 	out := httptest.NewRecorder()
 	WebActionStreamHandler("127.0.0.1", "http://127.0.0.1:1")(out, req)
-	for i := 0; i < cap(streamSlots); i++ {
-		<-streamSlots
+	for _, release := range releases {
+		release()
 	}
 	if out.Code != 429 {
 		t.Fatalf("want 429 got %d", out.Code)

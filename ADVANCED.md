@@ -34,11 +34,36 @@ record with a newline before updating the shared Streamer. Never restore an
 unauthenticated callback fallback. The browser must buffer incomplete records
 across HTTP chunks.
 
-This candidate includes the four original Streamer fixes reviewed on 19 October
-2026. Two availability findings remain open: one caller can consume all 64
-global stream slots, and partial callback handshakes are processed serially.
-The image is a personal compatibility/security candidate, not a claim of complete
-tenant-isolation hardening or an Apache release. See the TruChat fork's
-`docs/REMOTE_CODEX.md` for installation, acceptance, limits and rollback.
+The published image in `COMPATIBILITY_IMAGE.md` includes the four original
+Streamer fixes reviewed on 19 October 2026. Its two availability findings remain
+part of that immutable image: global-slot starvation by one caller and serial
+processing of partial callback handshakes.
+
+The 20 October source follow-up addresses those findings with
+controller-verified per-caller quotas, target/anonymous quotas and bounded
+concurrent callback authentication. See `README.md` for the changed admission
+limits and deployment tradeoffs. The `OPS-STREAM <STREAM_TOKEN>\n` preamble and
+existing time/body bounds remain unchanged. No KB protocol compatibility is
+implied; authenticated KB streaming requires its own canonical contract.
+
+Local validation covers original-trigger negative controls against commit
+`663a7fd3f31580f2f1c40820135d3c3338edab55`, Go race/vet checks, parallel/slow
+callback peers, credential/route aliases, custom web authorization, quota
+recovery, TruChat protocol/parser/proxy smoke tests and Alpha/Beta on the
+existing K3s lab. The TruChat smoke uses the actual client and proxy with
+synthetic AI/controller responses; it is not a full deployed-model test.
+The local image is `localhost/ops-streamer-availability:20261020-local2`.
+The source is available on the personal `advanced` branch. Its publication
+commit uses `[skip ci]` to keep the image-publishing workflow from running;
+Go race tests and vet were run locally. The local image has not been published,
+and the follow-up has not been independently reviewed by Daybreak.
+This candidate is not a claim of complete tenant-isolation hardening or an
+Apache release. The TruChat fork's `docs/REMOTE_CODEX.md` still describes the
+previously published image, its limits and rollback.
+
+KB integration should start from this source follow-up on a separate branch,
+preserving its admission and callback protections. The published image does not
+implement the canonical KB protocol. The public compatibility discussion is
+tracked in https://github.com/apache/openserverless/issues/274.
 
 See https://github.com/miki3421/openserverless/blob/advanced/ADVANCED.md for the component plan and validation status.

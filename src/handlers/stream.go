@@ -36,7 +36,6 @@ const maxBodyBytes = 1 << 20
 const streamStartTimeout = 20 * time.Second
 const maxStreamLifetime = 5 * time.Minute
 
-var streamSlots = make(chan struct{}, 64)
 var upstreamClient = &http.Client{
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
@@ -67,16 +66,35 @@ func streamHandler(addr, host string, web bool) http.HandlerFunc {
 				http.Error(w, "Authorization required", http.StatusUnauthorized)
 				return
 			}
+		} else {
+			credential, _ = extractAuthToken(r)
 		}
-		select {
-		case streamSlots <- struct{}{}:
-			defer func() { <-streamSlots }()
-		default:
+		target, err := actionURL(host, r, web)
+		if err != nil {
+			http.Error(w, "Invalid action target", http.StatusBadRequest)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), maxStreamLifetime)
+		defer cancel()
+		principal, identityStatus := streamPrincipal(ctx, host, credential)
+		if !web && identityStatus != 0 {
+			http.Error(w, http.StatusText(identityStatus), identityStatus)
+			return
+		}
+		quotaNamespace := r.PathValue("ns")
+		if !web && quotaNamespace == "_" && principal != "" {
+			// OpenWhisk resolves this alias relative to the verified caller.
+			// It must not create a shared target bucket across all tenants.
+			quotaNamespace = "private-default:" + principal
+		}
+		release, admitted := streams.acquire(quotaNamespace, principal, requestPeer(r))
+		if !admitted {
 			http.Error(w, "Too many active streams", http.StatusTooManyRequests)
 			return
 		}
-		// Apply the same bound on GET/POST and web/private routes, including
-		// chunked bodies. Decode before allocating a callback listener.
+		defer release()
+		// Quotas also cover slow/chunked input; no callback listener or action
+		// invocation is allocated until the bounded JSON object is decoded.
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		body, err := injectHostPortInBody(r, "", "")
 		if err != nil {
@@ -88,13 +106,6 @@ func streamHandler(addr, host string, web bool) http.HandlerFunc {
 			http.Error(w, http.StatusText(status), status)
 			return
 		}
-		target, err := actionURL(host, r, web)
-		if err != nil {
-			http.Error(w, "Invalid action target", http.StatusBadRequest)
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), maxStreamLifetime)
-		defer cancel()
 		sock, err := tcp.SetupTcpServer(ctx, addr)
 		if err != nil {
 			http.Error(w, "Callback unavailable", http.StatusServiceUnavailable)
