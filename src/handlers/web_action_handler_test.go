@@ -51,9 +51,11 @@ func TestWebActionHandler(t *testing.T) {
 		require.True(t, ok)
 		port, ok := jsonData["STREAM_PORT"].(string)
 		require.True(t, ok)
+		token, ok := jsonData["STREAM_TOKEN"].(string)
+		require.True(t, ok)
 
 		msg := fmt.Sprintf("Invoked action: %s/%s/%s", namespace, pkg, action)
-		err = sendTcpSocketMsg(host, port, msg)
+		err = sendTcpSocketMsg(host, port, "OPS-STREAM "+token+"\n"+msg+"\n")
 		require.NoError(t, err)
 
 		w.Write([]byte("ok"))
@@ -121,12 +123,12 @@ func TestAsyncPostWebAction(t *testing.T) {
 		},
 		{
 			name: "Error in request creation",
-			url:  "1231",
+			url:  "https://%invalid",
 			body: []byte(`{"key": "value"}`),
 			headers: map[string]string{
 				"Content-Type": "application/json",
 			},
-			expectedErrMsg: []string{"no such host", "no route to host"},
+			expectedErrMsg: []string{"invalid URL escape"},
 		},
 		{
 			name: "Non-200 status code",

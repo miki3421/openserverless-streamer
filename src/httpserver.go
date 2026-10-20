@@ -21,6 +21,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/apache/openserverless-streaming-proxy/handlers"
 )
@@ -83,7 +84,11 @@ func startHTTPServer(streamingProxyAddr string, apihost string) {
 	useCors := corsEnabled == "1" || corsEnabled == "true"
 
 	server := &http.Server{
-		Addr: ":" + httpPort,
+		Addr:              ":" + httpPort,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    32 << 10,
 		Handler: func() http.Handler {
 			if useCors {
 				return corsMiddleware(router)

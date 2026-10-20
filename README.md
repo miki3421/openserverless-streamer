@@ -61,6 +61,37 @@ given namespace, default package, and action name.
 - `GET/POST /web/{namespace}/{package}/{action}`: to invoke an OpenWhisk web 
 action on the given namespace, custom package, and action name.
 
+## Authenticated callback contract
+
+The patched proxy injects `STREAM_HOST`, `STREAM_PORT`, and a random
+`STREAM_TOKEN` into every invoked action. Before sending output on the TCP
+connection, the action must send the ASCII bytes `OPS-STREAM `, followed by
+the 64-character token and a newline. The proxy consumes this preamble and
+forwards only subsequent bytes to the HTTP client. Keep the token out of logs
+and responses. An incorrect token does not claim the listener. There is no
+unauthenticated callback fallback on the patched server.
+
+For Python, after opening the callback socket:
+
+```python
+connection.sendall(("OPS-STREAM " + args["STREAM_TOKEN"] + "\n").encode())
+connection.sendall(b'{"event":"synthetic"}\n')
+```
+
+Existing streaming actions must add this handshake before switching to the
+patched image. An action supporting both server generations may send the
+preamble only when the server supplies `STREAM_TOKEN`; the patched server
+always supplies it. The bundled example and Alpha/Beta validation action
+implement this transition. The TCP payload is forwarded byte-for-byte, so
+actions using NDJSON must supply their own newline delimiters.
+
+Requests are bounded to 1 MiB of JSON, 64 active streams per proxy process,
+20 seconds to authenticate the callback, 30 seconds of callback inactivity,
+and five minutes total lifetime. A saturated process returns 429, oversized
+input returns 413, and a missing callback returns 504. Upstream 401/403/404/429
+are retained; upstream failures use a sanitized 502 response. Request
+cancellation closes both the upstream request and callback resources.
+
 ## Building
 
 Check the [DEVEL.md](https://github.com/apache/openserverless/blob/main/DEVEL.md)

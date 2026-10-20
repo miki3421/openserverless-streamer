@@ -18,114 +18,110 @@
 package tcp
 
 import (
+	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
-	"log"
 	"net"
+	"strings"
 	"time"
 )
+
+const handshakeTimeout = time.Second
+const callbackIdleTimeout = 30 * time.Second
+const handshakePrefix = "OPS-STREAM "
 
 type SocketsServer struct {
 	ctx            context.Context
 	listener       net.Listener
 	Host           string
 	Port           string
+	Token          string
 	StreamDataChan chan []byte
+	Connected      chan struct{}
 }
 
-func SetupTcpServer(ctx context.Context, streamingProxyAddr string) (*SocketsServer, error) {
-	socketServer, err := startTCPServer(ctx, streamingProxyAddr)
-	if err != nil {
+func SetupTcpServer(ctx context.Context, addr string) (*SocketsServer, error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
 		return nil, err
 	}
-	go socketServer.WaitToCleanUp()
-
-	tcpServerHost, tcpServerPort, err := net.SplitHostPort(socketServer.listener.Addr().String())
+	listener, err := net.Listen("tcp", net.JoinHostPort(addr, "0"))
 	if err != nil {
+		return nil, errors.New("cannot create callback listener")
+	}
+	host, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		listener.Close()
 		return nil, err
 	}
-
-	socketServer.Host = tcpServerHost
-	socketServer.Port = tcpServerPort
-
-	return socketServer, nil
-}
-
-func startTCPServer(ctx context.Context, streamingProxyAddr string) (*SocketsServer, error) {
-	listener, err := net.Listen("tcp", streamingProxyAddr+":0")
-	if err != nil {
-		return nil, errors.New("Error starting TCP server")
-	}
-
 	s := &SocketsServer{
-		ctx:            ctx,
-		listener:       listener,
-		StreamDataChan: make(chan []byte),
+		ctx: ctx, listener: listener, Host: host, Port: port,
+		Token: hex.EncodeToString(secret), StreamDataChan: make(chan []byte),
+		Connected: make(chan struct{}),
 	}
-
+	go s.WaitToCleanUp()
 	go s.acceptConnections()
-
 	return s, nil
 }
 
 func (s *SocketsServer) acceptConnections() {
-	_, port, _ := net.SplitHostPort(s.listener.Addr().String())
-	log.Println("TCP server listening on:", port)
 	defer close(s.StreamDataChan)
-
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
-			select {
-			case <-s.ctx.Done():
-				return
-			default:
-				log.Println("accept error, retrying...", err.Error())
-			}
-		} else {
-			s.handleConnection(conn)
 			return
 		}
+		stopClose := context.AfterFunc(s.ctx, func() { _ = conn.Close() })
+		// Read a fixed-size authentication preamble before considering this peer
+		// the action producer. Rejected peers never consume the stream.
+		_ = conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
+		reader := bufio.NewReaderSize(conn, 256)
+		preamble := make([]byte, len(handshakePrefix)+len(s.Token)+1)
+		_, err = io.ReadFull(reader, preamble)
+		expected := handshakePrefix + s.Token + "\n"
+		if err != nil || subtle.ConstantTimeCompare(preamble, []byte(expected)) != 1 {
+			stopClose()
+			conn.Close()
+			continue
+		}
+		close(s.Connected)
+		stopClose()
+		_ = s.listener.Close()
+		s.handleReader(conn, reader)
+		return
 	}
 }
 
 func (s *SocketsServer) handleConnection(conn net.Conn) {
+	s.handleReader(conn, conn)
+}
+
+func (s *SocketsServer) handleReader(conn net.Conn, reader io.Reader) {
 	defer conn.Close()
-	log.Println(fmt.Sprintf("%s: accepted connection", s.Port))
-	buf := make([]byte, 2048)
-
-ReadLoop:
+	stopClose := context.AfterFunc(s.ctx, func() { _ = conn.Close() })
+	defer stopClose()
 	for {
-		select {
-		case <-s.ctx.Done():
+		if s.ctx.Err() != nil {
 			return
-
-		default:
-			conn.SetDeadline(time.Now().Add(100 * time.Millisecond))
-
-			for {
-				n, err := conn.Read(buf)
-
-				if err != nil {
-					if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
-						continue ReadLoop
-					} else if err != io.EOF {
-						log.Println("Error reading from TCP connection", err)
-						return
-					} else {
-						log.Println("Client closed connection")
-						return
-					}
-				}
-
-				if n == 0 {
-					continue ReadLoop
-				}
-
-				s.StreamDataChan <- buf[:n]
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(callbackIdleTimeout))
+		// A fresh owned buffer avoids mutation after handing the slice to the HTTP
+		// writer. Every send can be interrupted by cancellation.
+		buf := make([]byte, 2048)
+		n, err := reader.Read(buf)
+		if n > 0 {
+			select {
+			case s.StreamDataChan <- buf[:n]:
+			case <-s.ctx.Done():
+				return
 			}
+		}
+		if err != nil {
+			return
 		}
 	}
 }
@@ -133,5 +129,9 @@ ReadLoop:
 func (s *SocketsServer) WaitToCleanUp() {
 	<-s.ctx.Done()
 	_ = s.listener.Close()
-	log.Println(fmt.Sprintf("%s: stopped listening", s.Port))
+}
+
+// CallbackPreamble documents the action-side wire format without logging it.
+func CallbackPreamble(token string) string {
+	return handshakePrefix + strings.TrimSpace(token) + "\n"
 }

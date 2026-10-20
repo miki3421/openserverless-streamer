@@ -22,6 +22,23 @@ under the License.
 Personal development branch maintained by miki3421, based on Apache OpenServerless 0.9.0. This is not an Apache release.
 
 The `advanced` branch belongs to https://github.com/miki3421/openserverless-streamer.
-Inherited GitHub Actions workflows are archived under `.github/upstream-workflows/` on this branch, so pushes cannot publish upstream-style releases or images. They must be reviewed and retargeted before re-enabling. Existing release branches are unaffected.
+Inherited GitHub Actions workflows remain archived under `.github/upstream-workflows/`.
+The personal `advanced-image.yml` workflow publishes only from this repository's
+`advanced` branch to `ghcr.io/miki3421/openserverless-streamer`, using a full-commit
+image tag. It runs Go race tests and vet before publishing a Linux amd64 image.
+It has no Git write permission and creates no tags, releases, or Apache images.
+
+The callback authentication change requires a client-first rollout: update
+streaming actions to send `OPS-STREAM <STREAM_TOKEN>\n`, and delimit every JSON
+record with a newline before updating the shared Streamer. Never restore an
+unauthenticated callback fallback. The browser must buffer incomplete records
+across HTTP chunks.
+
+This candidate includes the four original Streamer fixes reviewed on 19 October
+2026. Two availability findings remain open: one caller can consume all 64
+global stream slots, and partial callback handshakes are processed serially.
+The image is a personal compatibility/security candidate, not a claim of complete
+tenant-isolation hardening or an Apache release. See the TruChat fork's
+`docs/REMOTE_CODEX.md` for installation, acceptance, limits and rollback.
 
 See https://github.com/miki3421/openserverless/blob/advanced/ADVANCED.md for the component plan and validation status.

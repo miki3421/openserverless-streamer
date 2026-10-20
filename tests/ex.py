@@ -39,13 +39,17 @@ def main(args):
     # # invoke a call to a streaming api server like OpenAI
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((streamer[0], int(streamer[1])))
+        # The callback capability is supplied per request. Never log it.
+        token = args.get("STREAM_TOKEN")
+        if token:
+            s.sendall(("OPS-STREAM " + token + "\n").encode())
 
         for ex in example_data:
             time.sleep(1)
             if ex:
                 # send data
                 print(f"sending: {ex}")
-                s.sendall(ex.encode())
+                s.sendall((ex + "\n").encode())
 
         print("done sending")
         s.close()

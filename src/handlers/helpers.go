@@ -30,12 +30,25 @@ func injectHostPortInBody(r *http.Request, tcpServerHost string, tcpServerPort s
 	defer body.Close()
 
 	jsonBody := make(map[string]interface{})
-	err := json.NewDecoder(body).Decode(&jsonBody)
+	decoder := json.NewDecoder(body)
+	err := decoder.Decode(&jsonBody)
 	// In case of a GET request, the body is empty and we have to initialize it manually
 	if err == io.EOF {
 		jsonBody = make(map[string]interface{})
 	} else if err != nil {
 		return nil, err
+	}
+	if jsonBody == nil {
+		return nil, errors.New("JSON object required")
+	}
+	if err != io.EOF {
+		var extra interface{}
+		if trailing := decoder.Decode(&extra); trailing != io.EOF {
+			if trailing != nil {
+				return nil, trailing
+			}
+			return nil, errors.New("single JSON object required")
+		}
 	}
 
 	jsonBody["STREAM_HOST"] = tcpServerHost
@@ -64,6 +77,12 @@ func extractAuthToken(r *http.Request) (string, error) {
 
 	// get the apikey without the Bearer prefix
 	apiKey = strings.TrimPrefix(apiKey, "Bearer ")
+	if user, password, ok := r.BasicAuth(); ok {
+		apiKey = user + ":" + password
+	}
+	if apiKey == "" {
+		return "", errors.New("Missing Authorization token")
+	}
 	return apiKey, nil
 }
 
