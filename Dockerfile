@@ -14,12 +14,12 @@
 # limitations under the License.
 #
 
-# Do not fix the patch level for golang:1.25 to automatically get security fixes.
-FROM golang:1.25-alpine AS builder
+# ADV AMD64 qualification: update this immutable toolchain pin explicitly.
+FROM golang:1.27.3-alpine@sha256:0fd028db9bdd4f01657bc8047c209b04d8ce19b853d776bd6f1e76a41729b936 AS builder
 WORKDIR /src
 COPY src/ .
-ENV CGO_ENABLED=0 GOOS=linux
-RUN go build -ldflags="-s -w" -o streamer
+ENV CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=local
+RUN go build -mod=readonly -ldflags="-s -w" -o streamer
 
 FROM scratch
 ARG STREAMER_IMAGE_DEFAULT=docker.io/apache/openserverless-streamer
